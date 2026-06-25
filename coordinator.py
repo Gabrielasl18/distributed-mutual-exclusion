@@ -30,8 +30,11 @@ algo_snapshot = {"cs_holder": None, "wait_queue": []}
 
 os.makedirs("logs", exist_ok=True)
 
+logging.getLogger().handlers.clear()
+
 logging.basicConfig(
     filename="logs/server.log",
+    filemode="w",   
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -79,7 +82,7 @@ def client_reader(pid: int, sock: socket.socket):
 
             log_event(f"RECV | {msg_type} | pid={sender}")
 
-            # coloca mensagem na fila do algoritmo
+            # coloca mensagem na fila 
             incoming.put((msg_type, sender))
 
         except Exception:
@@ -93,7 +96,6 @@ def client_reader(pid: int, sock: socket.socket):
 
     log_event(f"DISCONNECT | pid={pid}")
 
-# THREAD: ACEITA CONEXÕES
 def connection_listener(server_sock):
     """Aceita conexões e registra novos processos"""
     while not shutdown_flag.is_set():
@@ -136,7 +138,7 @@ def connection_listener(server_sock):
 
 
 def algorithm_thread():
-    """Executa algoritmo centralizado de exclusão mútua"""
+    """Executa algoritmo de exclusão mútua"""
 
     cs_holder = None         
     wait_queue = deque()      
