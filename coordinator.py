@@ -136,76 +136,81 @@ def connection_listener(server_sock):
             daemon=True
         ).start()
 
-
 def algorithm_thread():
-    """Executa algoritmo de exclusão mútua"""
-
-    cs_holder = None         
-    wait_queue = deque()      
-
+    """Executa algoritmo de exclusão mútua (versão simplificada)"""
+ 
+    wait_queue = deque()
+ 
     while not shutdown_flag.is_set():
         try:
             msg_type, pid = incoming.get(timeout=0.5)
         except queue.Empty:
             continue
-
-        # pedido de entrada
+ 
+        # REQUEST
         if msg_type == TYPE_REQUEST:
-            req_id = next(request_counter)
-            request_map[pid] = req_id
-
-            log_event(f"REQUEST | pid={pid} req={req_id} | {snapshot(cs_holder, wait_queue)}")
-
-            # se RC livre, entra direto
-            if cs_holder is None:
-                cs_holder = pid
+            log_event(f"REQUEST | pid={pid}")
+ 
+            # verifica se a fila estava vazia antes da chegada
+            was_empty = len(wait_queue) == 0
+ 
+            # evita duplicar na fila
+            if pid not in wait_queue:
+                wait_queue.append(pid)
+ 
+            # se a fila estava vazia, já recebe grant
+            if was_empty:
                 send_grant(pid)
-                log_event(f"GRANT | pid={pid} req={req_id} | {snapshot(cs_holder, wait_queue)}")
-
-            # senão,entra na fila
-            else:
-                if pid not in wait_queue:
-                    wait_queue.append(pid)
-
-        # liberação da RC
-        elif msg_type == TYPE_RELEASE:
-            req_id = request_map.get(pid, -1)
-
-            log_event(f"RELEASE | pid={pid} req={req_id} | {snapshot(cs_holder, wait_queue)}")
-
-            # libera RC se era o dono
-            if cs_holder == pid:
+ 
                 with state_lock:
                     grant_count[pid] += 1
-                cs_holder = None
-
-            # se tem fila entao passa para próximo
-            if wait_queue:
-                next_pid = wait_queue.popleft()
-                cs_holder = next_pid
-
-                next_req = request_map.get(next_pid, -1)
-                send_grant(next_pid)
-
-                log_event(f"GRANT | pid={next_pid} req={next_req} | {snapshot(cs_holder, wait_queue)}")
-
-        elif msg_type == "DISCONNECT":
-            # remove da fila
-            wait_queue = deque([p for p in wait_queue if p != pid])
-
-            # se estava na RC
-            if cs_holder == pid:
-                cs_holder = None
-
+ 
+                log_event(f"GRANT | pid={pid}")
+ 
+        # RELEASE
+        elif msg_type == TYPE_RELEASE:
+            log_event(f"RELEASE | pid={pid}")
+ 
+            # remove quem acabou de sair da RC
+            if wait_queue and wait_queue[0] == pid:
+                wait_queue.popleft()
+ 
+                # próximo da fila entra
                 if wait_queue:
-                    next_pid = wait_queue.popleft()
-                    cs_holder = next_pid
+                    next_pid = wait_queue[0]
+ 
                     send_grant(next_pid)
-
-        # atualiza snapshot global (para interface)
+ 
+                    with state_lock:
+                        grant_count[next_pid] += 1
+ 
+                    log_event(f"GRANT | pid={next_pid}")
+ 
+        # DISCONNECT
+        elif msg_type == "DISCONNECT":
+            log_event(f"DISCONNECT | pid={pid}")
+ 
+            # verifica se o desconectado estava na RC
+            was_head = wait_queue and wait_queue[0] == pid
+ 
+            # remove o pid da fila
+            wait_queue = deque(p for p in wait_queue if p != pid)
+ 
+            # se quem saiu estava na RC, libera o próximo
+            if was_head and wait_queue:
+                next_pid = wait_queue[0]
+ 
+                send_grant(next_pid)
+ 
+                with state_lock:
+                    grant_count[next_pid] += 1
+ 
+                log_event(f"GRANT | pid={next_pid}")
+ 
+        # snapshot global (interface)
         with state_lock:
-            algo_snapshot["cs_holder"] = cs_holder
             algo_snapshot["wait_queue"] = list(wait_queue)
+            algo_snapshot["cs_holder"] = wait_queue[0] if wait_queue else None
 
 def interface_thread():
     """Interface do terminal"""
